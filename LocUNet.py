@@ -48,7 +48,7 @@ AOA_input = F.pad(AOA_real, padding, mode='constant', value=0)
 
 S_map = torch.zeros((len(RSS_input), 1, map_size, map_size), device=device)
 PDF_input = torch.cat((AOA_input,RSS_input, _map), dim=1)
-PDF_real = utils.generate_gaussian_heatmap(S_list.int(), img_size=map_size)
+PDF_real = utils.generate_heatmap(S_list.int(), img_size=map_size)
 
 training_dataloader = DataLoader(TensorDataset(PDF_input[0:int(len(PDF_input) // batch_size) * batch_size],
                                                PDF_real[0:int(len(PDF_real) // batch_size) * batch_size]),

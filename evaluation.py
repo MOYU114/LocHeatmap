@@ -9,7 +9,7 @@ os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 import matplotlib.pyplot as plt
 device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
-IS_Noise = True
+IS_Noise = False
 map_size = 128
 dataset_PATH = "./data/test_data/merge.pth"
 S_PATH = "./data/test_data/S_coord_fixed.csv"
@@ -59,10 +59,10 @@ def eval_func(loss_joint_list,noise_rate,threshold,loss_mode):
 
 
 loss_proposal_list = []
-loss_LocUNet_list = []
-loss_LocUNet_softmax_list = []
-loss_DCAE_list = []
-loss_DCAE_simple_list = []
+loss_baseline1_list = []
+loss_baseline2_list = []
+loss_baseline3_list = []
+loss_baseline4_list = []
 
 for i in X:
     if IS_Noise:
@@ -74,25 +74,25 @@ for i in X:
         else:
             noise_rate = 0
     eval_func(loss_proposal_list,noise_rate,threshold,f"proposal")
-    eval_func(loss_LocUNet_list, noise_rate,threshold, f"LocUNet")
-    eval_func(loss_LocUNet_softmax_list, noise_rate,threshold, f"LocUNet_softargmax")
-    eval_func(loss_DCAE_list, noise_rate,threshold, f"DCAe")
-    eval_func(loss_DCAE_simple_list, noise_rate,threshold, f"DCAe_simple")
+    eval_func(loss_baseline1_list, noise_rate, threshold, f"DCAe")
+    eval_func(loss_baseline2_list, noise_rate, threshold, f"DCAe_simple")
+    eval_func(loss_baseline3_list, noise_rate,threshold, f"LocUNet")
+    eval_func(loss_baseline4_list, noise_rate,threshold, f"LocUNet_softargmax")
 
     print(f"end{threshold,noise_rate}")
 
 loss_proposal_list = np.array(loss_proposal_list)
-loss_LocUNet_list = np.array(loss_LocUNet_list)
-loss_LocUNet_softmax_list = np.array(loss_LocUNet_softmax_list)
-loss_DCAE_list = np.array(loss_DCAE_list)
-loss_DCAE_simple_list = np.array(loss_DCAE_simple_list)
-loss_LocUNet_softmax_list[0] = 6.5
+loss_baseline1_list = np.array(loss_baseline1_list)
+loss_baseline2_list = np.array(loss_baseline2_list)
+loss_baseline3_list = np.array(loss_baseline3_list)
+loss_baseline4_list = np.array(loss_baseline4_list)
+
 plt.figure(figsize=(10, 6))
 plt.plot(X, loss_proposal_list, label='Proposal', marker='o')
-plt.plot(X, loss_DCAE_list, label='Baseline1: DCAe', marker='o')
-plt.plot(X, loss_DCAE_simple_list, label='Baseline2: DCAe-modified', marker='o')
-plt.plot(X, loss_LocUNet_list, label='Baseline3: LocUNet', marker='o')
-plt.plot(X, loss_LocUNet_softmax_list, label='Baseline4: LocUNet-modified', marker='o')
+plt.plot(X, loss_baseline1_list, label='Baseline1: DCAe', marker='o')
+plt.plot(X, loss_baseline2_list, label='Baseline2: DCAe-modified', marker='o')
+plt.plot(X, loss_baseline3_list, label='Baseline3: LocUNet', marker='o')
+plt.plot(X, loss_baseline4_list, label='Baseline4: LocUNet-modified', marker='o')
 
 output_file = ""
 # plt.title('RSS AOA Comparison (real datas)')

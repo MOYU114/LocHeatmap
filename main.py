@@ -29,9 +29,9 @@ def aoa_rss_joint_forward(gen_map, aoa_uav, rss_uav, mask_sig, treshold, S_real,
 if __name__ == '__main__':
     test_index = random.randint(55, 67 - 1)
     test_index = 62
-    treshold = 0.80
-    gen_map, aoa_uav, rss_uav, mask_sig, S_real = utils.data_preprocess(dataset_PATH,S_PATH, treshold, test_index)
+    threshold = 0.90
+    gen_map, aoa_uav, rss_uav, mask_sig, S_real = utils.data_preprocess(dataset_PATH, S_PATH, threshold, test_index)
     print(f"test_index: {test_index}")
-    S_pred_final = aoa_rss_joint_forward(gen_map, aoa_uav, rss_uav, mask_sig, treshold, S_real)
+    S_pred_final = aoa_rss_joint_forward(gen_map, aoa_uav, rss_uav, mask_sig, threshold, S_real)
     print(f"S_pred: {S_pred_final}")
     print(f"S_real: {S_real}")

@@ -285,7 +285,21 @@ class SoftArgmax(nn.Module):
         y_coords = torch.sum(heatmap * self.Y[None, None, :, :], dim=[2, 3])  # (batch_size, 1)
 
         return torch.cat([x_coords, y_coords], dim=-1)  # (batch_size, 2)
+class UNet_rss(nn.Module):
+    def __init__(self,input_dim):
+        super(UNet_rss, self).__init__()
+        self.unet = LocUNet(input_dim)
+    def forward(self,x):
+        out = self.unet(x)
+        return out
 
+class UNet_aoa(nn.Module):
+    def __init__(self,input_dim):
+        super(UNet_aoa, self).__init__()
+        self.unet = LocUNet(input_dim)
+    def forward(self,x):
+        out = self.unet(x)
+        return out
 
 class model_aoa_rss(nn.Module):
     def __init__(self):
@@ -323,19 +337,17 @@ class model_aoa_rss(nn.Module):
         self.model_LocUNet_softargmax.eval()
         # other small change
 
-        # self.aoa_PDF_transform = LocUNet(1).to(device)
-        # self.aoa_PDF_transform.load_state_dict(torch.load("model/aoa_PDF_model__test_real.pth", weights_only=True))
-        # self.rss_PDF_transform = LocUNet(1).to(device)
-        # self.rss_PDF_transform.load_state_dict(torch.load("model/rss_PDF_model__test_real.pth", weights_only=True))
-        # self.PDF_transform_gaussian = LocUNet(2).to(device)
-        #
-        # self.PDF_transform_gaussian.load_state_dict(
-        #     torch.load("model/PDF_model__test_log.pth", weights_only=True))
+        self.aoa_heatmap_transform = UNet_aoa(1).to(device)
+        self.aoa_heatmap_transform.load_state_dict(torch.load("model/aoa_PDF_model_test.pth", weights_only=True))
+        self.rss_heatmap_transform = UNet_rss(1).to(device)
+        self.rss_heatmap_transform.load_state_dict(torch.load("model/rss_PDF_model_test.pth", weights_only=True))
+        self.heatmap_transform_gaussian = LocUNet(2).to(device)
+        self.heatmap_transform_gaussian.load_state_dict(torch.load("model/PDF_model_test_gaussian.pth", weights_only=True))
 
     def forward(self, aoa_input, rss_input, mode="proposal"):
 
         map_size = aoa_input.size(2)
-        if mode == "proposal":
+        if mode == "proposal" or mode == "proposal_dsnt":
             aoa_pred = self.model_aoa(aoa_input)
             rss_pred = self.model_rss(rss_input)
             aoa_pred_norm = utils.get_norm(aoa_pred, 1)
@@ -370,7 +382,17 @@ class model_aoa_rss(nn.Module):
             gen_map = rss_input[:, 1, :, :].unsqueeze(1)
             joint_uav = torch.cat((rss_uav, aoa_uav, gen_map), dim=1)
             Heatmap_matrix = self.model_LocUNet_softargmax(joint_uav).squeeze()
-        else:
+        elif mode == "proposal_rss_only":
+            rss_pred = self.model_rss(rss_input)
+            rss_pred_norm = utils.get_norm(rss_pred, 1)
+            utils.draw_map(rss_pred_norm[0], f"rss_pred")
+            Heatmap_matrix = self.rss_heatmap_transform(rss_pred_norm).squeeze()
+        elif mode == "proposal_aoa_only":
+            aoa_pred = self.model_aoa(aoa_input)
+            aoa_pred_norm = utils.get_norm(aoa_pred, 1)
+            utils.draw_map(aoa_pred_norm[0], f"aoa_pred")
+            Heatmap_matrix = self.aoa_heatmap_transform(aoa_pred_norm).squeeze()
+        elif mode == "proposal_gaussian_dsnt" or mode == "proposal_gaussian_softargmax":
             aoa_pred = self.model_aoa(aoa_input)
             rss_pred = self.model_rss(rss_input)
             aoa_pred_norm = utils.get_norm(aoa_pred, 1)
@@ -380,33 +402,33 @@ class model_aoa_rss(nn.Module):
             utils.draw_map(rss_pred_norm[0], f"rss_pred")
 
             joint_pred_norm = torch.cat((rss_pred_norm, aoa_pred_norm), dim=1)
-            Heatmap_matrix = self.Heatmap_transform(joint_pred_norm).squeeze()
+            Heatmap_matrix = self.heatmap_transform_gaussian(joint_pred_norm).squeeze()
 
         Heatmap_matrix = (Heatmap_matrix - torch.min(Heatmap_matrix)) / (torch.max(Heatmap_matrix) - torch.min(Heatmap_matrix))
 
-        utils.draw_map(Heatmap_matrix,f"Heatmap_matrix")
+        utils.draw_map(Heatmap_matrix,f"Heatmap Matrix (Gaussian)")
         significant_coords = []
         value_list = []
-        if mode == "LocUNet_softargmax" or mode == "proposal" :
+        if mode == "LocUNet_softargmax" or mode == "proposal" or mode == "proposal_gaussian_softargmax":
             softargmax = SoftArgmax(map_size, map_size)
             significant_coords = softargmax(Heatmap_matrix.unsqueeze(0).unsqueeze(1))
 
             for x, y in significant_coords:
                 value_list.append(Heatmap_matrix[x.round().long(), y.round().long()])
-        elif mode == "LocUNet":
+        elif mode == "LocUNet" or mode == "proposal_gaussian_dsnt" or mode == "proposal_dsnt":
             dsnt = DSNT(map_size, map_size)
             temp = Heatmap_matrix.unsqueeze(0).unsqueeze(1) / torch.sum(Heatmap_matrix.unsqueeze(0).unsqueeze(1))
             significant_coords = dsnt(temp)
 
             for x, y in significant_coords:
                 value_list.append(Heatmap_matrix[x.round().long(), y.round().long()])
-        elif mode == "DCAe" or mode == "DCAe_simple":
+        else:
             coords = utils.find_maxarg_single(Heatmap_matrix.unsqueeze(0).unsqueeze(1))
             significant_coords.append(coords)
             for x, y in significant_coords:
                 value_list.append(Heatmap_matrix[x, y])
-        else:
-            significant_coords, value_list = utils.find_maxarg_in_regions(Heatmap_matrix.unsqueeze(0).unsqueeze(1))
+        # else:
+        #     significant_coords, value_list = utils.find_maxarg_in_regions(Heatmap_matrix.unsqueeze(0).unsqueeze(1))
 
         for loss, S_pred in zip(significant_coords, value_list):
             print(f"Loss: {loss}, S_pred: {S_pred}")

@@ -3,32 +3,11 @@ import math
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from scipy.ndimage import maximum_filter
-from PIL import Image
 import os
-from torchvision import transforms
-
+import pandas as pd
+import torch.nn.functional as F
 
 device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-
-
-def empty_map_gen(M, N, input):
-    return [[input for _ in range(N)] for _ in range(M)]
-
-
-def find_not_building(_map, M, N):
-    # 找到非矩形覆盖的位置
-    while True:
-        origin_x = random.randint(15, M - 15)  # 不在边缘生成，范围为[15,M-15]
-        origin_y = random.randint(15, N - 15)
-        if _map[origin_x][origin_y] == 0:
-            return _map, origin_x, origin_y
-
-
-# (x-X0)/(X1-X0）＝(y-Y0)/(Y1-Y0)＝(z-Z0)/(Z1-Z0) Z0=0
-def calculate_height(x0, y0, h0, x1, y1, t, Rh):
-    return h0 + t * (Rh - h0)
-
 
 def dist(x0, y0, x1, y1):
     return math.sqrt(pow(x0 - x1, 2) + pow(y0 - y1, 2))
@@ -48,32 +27,6 @@ def _draw(data, title, origin_x=None, origin_y=None):
     plt.clf()
 
 
-def convert_coordinates_to_matrix(coords, height=128, width=128):
-    batch_size = coords.shape[0]
-    # 创建一个全为0的矩阵
-    result = torch.zeros((batch_size, 1, height, width), device=coords.device)
-
-    # 将对应的坐标位置设为1
-    for i in range(batch_size):
-        x, y = coords[i].long()
-        result[i, 0, y, x] = 1
-
-    return result
-
-
-def extract_coordinates_from_matrix(matrix):
-    batch_size, num_points, height, width = matrix.shape
-    coords = []
-    for i in range(batch_size):
-        coords_batch = []
-        for j in range(num_points):
-            pos = torch.argmax(matrix[i, j])
-            y, x = divmod(pos.item(), width)
-            coords_batch.append([x, y])
-        coords.append(coords_batch)
-    return torch.tensor(coords, device=matrix.device).float()
-
-
 def find_maxarg_multi(heatmap, index):
     result = []
     for i in range(len(heatmap)):
@@ -89,7 +42,7 @@ def find_maxarg_single(heatmap):
     return x, y
 
 
-def calculate_threshold_from_hist_torch(matrix, bins=100, percentile=99):
+def _calculate_threshold_from_hist_torch(matrix, bins=100, percentile=99):
     # Flatten the matrix to a 1D tensor
     flat_matrix = matrix.flatten()
 
@@ -120,7 +73,7 @@ def find_maxarg_in_regions(heatmap, region_nums=8):
     _, _, height, width = heatmap.size()
     region_height = height // region_nums
     region_width = width // region_nums
-    threshold = calculate_threshold_from_hist_torch(heatmap)
+    threshold = _calculate_threshold_from_hist_torch(heatmap)
     # Clone the heatmap to modify it without affecting the original
     working_heatmap = heatmap.clone()
 
@@ -154,154 +107,6 @@ def find_maxarg_in_regions(heatmap, region_nums=8):
         value_list.append(heatmap[0, 0, x, y])
     return significant_coords, value_list
 
-
-def find_closest_point(S, significant_coords, value_list, tres=16):
-    # 计算目标点 S 与所有显著点之间的距离
-    scores = []
-    for (x, y), value in zip(significant_coords, value_list):
-        d = dist(S[0], S[1], x, y)  # 假设 dist 函数已定义
-        # 如果 d > tres，则直接将 score 设为无穷小，排除
-        if d > tres:
-            score = float('-inf')
-        else:
-            score = value / d
-        scores.append(score)
-
-    # 找出 composite score 最大的索引
-    best_idx = scores.index(max(scores))
-
-    return np.array(significant_coords[best_idx]), value_list[best_idx]
-
-
-def random_move(S, map_size, Zm):
-    # 随机选择移动方向
-    move = random.choice(['up', 'down', 'left', 'right'])
-
-    # 当前坐标
-    x, y = S
-
-    # 根据选择的方向更新坐标
-    if move == 'up' and y < map_size - 1:
-        y += 1
-    elif move == 'down' and y > 0:
-        y -= 1
-    elif move == 'left' and x > 0:
-        x -= 1
-    elif move == 'right' and x < map_size - 1:
-        x += 1
-
-    new_position = torch.tensor([x, y], device=S.device)
-
-    # 检查新位置是否与 Zm 中的任何元素重合
-    if not any(torch.equal(new_position, z) for z in Zm):
-        return new_position
-
-
-def image_find(image_dir):
-    # 定义图像目录路径
-
-    # 图像转换操作
-    transform = transforms.Compose([
-        transforms.Grayscale(),  # 如果需要将图像转换为灰度图
-        transforms.ToTensor(),  # 将图像转换为tensor
-    ])
-
-    # 初始化一个空的列表来存储图像tensor
-    image_tensors = []
-
-    # 读取目录下的图像文件
-    for filename in os.listdir(image_dir):
-        if filename.endswith('.jpg') or filename.endswith('.png'):
-            # 打开图像
-            img_path = os.path.join(image_dir, filename)
-            img = Image.open(img_path)
-
-            # 转换图像并添加到列表中
-            img_tensor = transform(img)
-            image_tensors.append(img_tensor)
-
-            # 如果已经读取了4000张图片，跳出循环
-            if len(image_tensors) >= 4000:
-                break
-
-    # 将图像tensor列表转换为形状为[4000, L, W]的tensor
-    images_tensor = torch.stack(image_tensors)
-
-    # 如果图像是彩色的（3通道），可以使用以下代码转换为灰度图
-    # images_tensor = images_tensor.mean(dim=1)
-    return images_tensor
-
-def is_blocking(map, S, Rh):
-    device = map.device
-    M, _ = map.size()
-
-    origin_x, origin_y = S.to(device)
-
-    # 生成目标点 Z 的坐标
-    Z_x, Z_y = torch.meshgrid(torch.arange(M, device=device), torch.arange(M, device=device))
-    Z = torch.stack([Z_x.flatten(), Z_y.flatten()], dim=-1)  # 形状为 [M*M, 2]
-
-    x, y = Z[:, 0], Z[:, 1]
-
-    # 计算 delta_x, delta_y 和 max_step
-    delta_x = x - origin_x
-    delta_y = y - origin_y
-    max_step = torch.max(torch.abs(delta_x), torch.abs(delta_y))
-
-    # 创建一个数组来存储结果
-    results = torch.full((M * M,), False, device=device)
-
-    # 创建一个索引矩阵
-    steps = torch.linspace(0, 1, max_step.max().long() + 1, device=device)  # (N_steps,)
-    steps = steps.unsqueeze(0).expand(len(x), -1)  # (M*M, N_steps)
-
-    current_x = (origin_x + steps * delta_x.unsqueeze(1)).long()  # (M*M, N_steps)
-    current_y = (origin_y + steps * delta_y.unsqueeze(1)).long()  # (M*M, N_steps)
-
-    valid_steps = (current_x >= 0) & (current_x < M) & (current_y >= 0) & (current_y < M)
-    valid_indices = valid_steps.sum(dim=1) > 0  # 至少有一个有效步长的点
-    current_x = current_x[valid_indices]
-    current_y = current_y[valid_indices]
-
-    current_height = steps[valid_indices] * (Rh - 0)  # 保持维度
-
-    # 计算阻挡
-    for i in range(current_x.shape[0]):
-        if torch.any(map[current_x[i], current_y[i]] > current_height[i]):
-            results[valid_indices.nonzero(as_tuple=True)[0][i]] = True
-
-    return results.view(M, M)
-
-
-def Zm_circle_mask(height_map, circle_n, Rh, R, r):
-    circle_n -= 1
-    _, map_size = height_map.size()
-    # 地图中心
-    center_x, center_y = map_size // 2 - 1, map_size // 2 - 1
-
-    # 创建网格
-    x = torch.arange(0, 128).float().unsqueeze(1).repeat(1, 128)
-    y = torch.arange(0, 128).float().unsqueeze(0).repeat(128, 1)
-    test = 0
-    # 计算到中心的距离矩阵
-    dist = torch.sqrt((x - center_x) ** 2 + (y - center_y) ** 2)
-    annular_mask = torch.zeros((map_size, map_size), dtype=torch.bool)
-    for R_i in range(0, R + 1, R // circle_n):
-        if R_i == 0:
-            R_i = r
-            test += r ** 2
-        # 大圆半径内的点
-        outer_circle = dist <= R_i
-        # 小圆半径内的点
-        inner_circle = dist < (R_i - r)
-        test += (R_i ** 2 - (R_i - r) ** 2)
-        # 计算环形遮罩
-        annular_mask |= outer_circle & ~inner_circle
-
-    # 高度过滤
-    mask = annular_mask & (height_map < Rh)
-    print(test * 3.14 / map_size ** 2)
-    return mask
 
 
 def rsslos_gen_single(M, N, origin_x, origin_y):
@@ -483,97 +288,7 @@ def get_rand_sparse_matrix_norm_from_median(input_map, batch_size, mask, max_ctl
         # input_map_norm[i, 0] = (input_map_single-input_map_single.mean().expand_as(input_map_single))/(input_map_single.std(unbiased=False).expand_as(input_map_single)+eps)
     return input_map_norm
 
-
-def extract_horizontal(data, coords, criterion):
-    batch_size, channels, H, W = data.shape
-    x_coords = coords[:, 0]
-    y_coords = coords[:, 1]
-
-    left_sizes = y_coords
-    right_sizes = W - y_coords - 1
-    min_sizes = torch.min(left_sizes, right_sizes)
-
-    loss = 0
-    cnt = batch_size
-    for i in range(batch_size):
-        y = y_coords[i].item()
-        min_size = min_sizes[i].item()
-
-        if min_size <= 0:
-            cnt -= 1
-            continue
-
-        left = data[i, 0, :, y - min_size: y]
-
-        right = data[i, 0, :, y + 1: y + 1 + min_size]
-
-        left_temp = left == -1
-        right_temp = right == -1
-
-        left_mask = left_temp | torch.flip(right_temp, dims=[1])
-        right_mask = right_temp | torch.flip(left_temp, dims=[1])
-
-        left = left.clone()  # 保持计算图的连贯性，clone 生成新的 tensor
-        right = right.clone()
-        left[left_mask] = 0
-        right[right_mask] = 0
-
-        loss += criterion(left + torch.flip(right, dims=[1]), torch.full_like(left, 1, device=device))
-    if cnt > 0:
-        return loss / cnt
-    else:
-        return loss
-
-
-def extract_vertical(data, coords, criterion):
-    batch_size, channels, H, W = data.shape
-    x_coords = coords[:, 0]
-    y_coords = coords[:, 1]
-
-    top_sizes = H - x_coords - 1
-    bottom_sizes = x_coords
-    min_sizes = torch.min(top_sizes, bottom_sizes)
-
-    loss = 0
-    cnt = batch_size
-    for i in range(batch_size):
-        x = x_coords[i].item()
-        min_size = min_sizes[i].item()
-
-        if min_size <= 0:
-            cnt -= 1
-            continue
-
-        top = data[i, 0, x + 1: x + 1 + min_size, :]
-
-        bottom = data[i, 0, x - min_size: x, :]
-
-        top_temp = top == -1
-        bottom_temp = bottom == -1
-
-        top_mask = top_temp | torch.flip(bottom_temp, dims=[0])
-        bottom_mask = bottom_temp | torch.flip(top_temp, dims=[0])
-
-        top = top.clone()  # 保持计算图的连贯性，clone 生成新的 tensor
-        bottom = bottom.clone()
-        top[top_mask] = 0
-        bottom[bottom_mask] = 0
-
-        loss += criterion((top + torch.flip(bottom, dims=[0])) % 1, torch.full_like(top, 0.5, device=device))
-    if cnt > 0:
-        return loss / cnt
-    else:
-        return loss
-
-
-def extract_all_direction(data, coords, criterion):
-    loss_horizontal = extract_horizontal(data, coords, criterion)
-    loss_vertical = extract_vertical(data, coords, criterion)
-    total_loss = loss_horizontal + loss_vertical
-    return total_loss
-
-
-def generate_gaussian_heatmap(coords, img_size=128, sigma=3, alpha0=-5, beta0=-5, func="log"):
+def generate_heatmap(coords, img_size=128, sigma=3, alpha0=-5, beta0=-5, func="log"):
     batch_size = coords.shape[0]
     heatmaps = torch.zeros(batch_size, 1, img_size, img_size, device=device)
 
@@ -603,9 +318,6 @@ def draw_map(_map,map_name,origin_x=None, origin_y=None):
     temp = _map.squeeze().to("cpu")
     _draw(temp.detach().numpy(), map_name,origin_x,origin_y)
 
-
-import pandas as pd
-import torch.nn.functional as F
 def data_preprocess(dataset_PATH,S_PATH, threshold, real_index, noise_rate=0, seed=114514,map_size=128):
     torch.manual_seed(seed)
     mask_sig = torch.rand(1, 1, map_size, map_size, device=device) > threshold
